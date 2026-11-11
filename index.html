@@ -1,0 +1,480 @@
+index.html
+{
+  "rules": {
+    "rooms": {
+      "$roomId": {
+        ".read": true,
+        ".write": true
+      }
+    }
+  }
+}   
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>3D Battle Room</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { overflow: hidden; font-family: 'Segoe UI', sans-serif; }
+#join-screen {
+  position: fixed; inset: 0; background: linear-gradient(135deg, #1a1a2e, #16213e);
+  display: flex; align-items: center; justify-content: center; z-index: 100;
+}
+#join-box {
+  background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 16px; padding: 40px; text-align: center; min-width: 320px;
+  backdrop-filter: blur(10px);
+}
+#join-box h1 { color: #fff; font-size: 28px; margin-bottom: 8px; }
+#join-box p { color: #888; font-size: 13px; margin-bottom: 20px; }
+#join-box input {
+  width: 100%; padding: 12px 16px; margin: 8px 0; border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.05);
+  color: #fff; font-size: 14px; outline: none;
+}
+#join-box input:focus { border-color: #4a9eff; }
+#join-box button {
+  width: 100%; padding: 14px; margin-top: 16px; border: none; border-radius: 8px;
+  background: linear-gradient(135deg, #4a9eff, #2563eb); color: #fff;
+  font-size: 16px; font-weight: bold; cursor: pointer; transition: transform 0.1s;
+}
+#join-box button:hover { transform: scale(1.02); }
+#join-box button:active { transform: scale(0.98); }
+#hud {
+  position: fixed; top: 10px; left: 10px; color: #fff; font-size: 13px;
+  background: rgba(0,0,0,0.5); padding: 10px 14px; border-radius: 8px;
+  display: none; z-index: 50; line-height: 1.8;
+}
+#crosshair {
+  position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
+  color: #fff; font-size: 24px; display: none; z-index: 50; pointer-events: none;
+  text-shadow: 0 0 4px rgba(0,0,0,0.8);
+}
+#controls {
+  position: fixed; bottom: 10px; left: 10px; color: rgba(255,255,255,0.6);
+  font-size: 11px; background: rgba(0,0,0,0.4); padding: 8px 12px;
+  border-radius: 6px; display: none; z-index: 50; line-height: 1.6;
+}
+#player-list {
+  position: fixed; top: 10px; right: 10px; color: #fff; font-size: 12px;
+  background: rgba(0,0,0,0.5); padding: 10px 14px; border-radius: 8px;
+  display: none; z-index: 50;
+}
+#player-list h3 { font-size: 12px; color: #aaa; margin-bottom: 6px; }
+#player-list span { display: block; padding: 2px 0; }
+</style>
+</head>
+<body>
+
+<div id="join-screen">
+  <div id="join-box">
+    <h1>⚔️ 3D Battle Room</h1>
+    <p>ルームIDを共有して友達と遊ぼう</p>
+    <input id="inp-name" placeholder="あなたの名前" maxlength="12">
+    <input id="inp-room" placeholder="ルームID（例: abc123）" maxlength="12">
+    <button onclick="joinRoom()">🎮 参戦する</button>
+  </div>
+</div>
+
+<div id="hud"></div>
+<div id="crosshair">+</div>
+<div id="controls">
+  WASD: 移動 | Space: ジャンプ | 左クリック: ブロック設置<br>
+  右クリック: ブロック破壊 | E: 射撃 | C: 視点切替
+</div>
+<div id="player-list"><h3>👥 プレイヤー</h3><div id="pl-items"></div></div>
+
+<script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
+<script>
+// ===== Firebase 設定（自分の値に置き換え） =====
+const firebaseConfig = {
+  apiKey: "ここを置き換え",
+  authDomain: "プロジェクト.firebaseapp.com",
+  databaseURL: "https://プロジェクト.firebaseio.com",
+  projectId: "プロジェクト",
+  appId: "自分のappId"
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
+
+// ===== Three.js 基本セットアップ =====
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x87ceeb);
+scene.fog = new THREE.Fog(0x87ceeb, 50, 120);
+
+const camera = new THREE.PerspectiveCamera(70, innerWidth/innerHeight, 0.1, 500);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+// 光
+const sunLight = new THREE.DirectionalLight(0xfff5e0, 1.5);
+sunLight.position.set(30, 50, 30);
+sunLight.castShadow = true;
+sunLight.shadow.mapSize.set(2048, 2048);
+sunLight.shadow.camera.near = 1;
+sunLight.shadow.camera.far = 150;
+sunLight.shadow.camera.left = -50;
+sunLight.shadow.camera.right = 50;
+sunLight.shadow.camera.top = 50;
+sunLight.shadow.camera.bottom = -50;
+scene.add(sunLight);
+scene.add(new THREE.AmbientLight(0x6688cc, 0.6));
+const hemiLight = new THREE.HemisphereLight(0x87ceeb, 0x3a7a3a, 0.4);
+scene.add(hemiLight);
+
+// 地面
+const groundGeo = new THREE.PlaneGeometry(200, 200, 50, 50);
+const groundMat = new THREE.MeshLambertMaterial({ color: 0x4a8a3a });
+const ground = new THREE.Mesh(groundGeo, groundMat);
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
+
+// 格子線（フォトナ風）
+const gridHelper = new THREE.GridHelper(200, 50, 0x3a7a2a, 0x3a7a2a);
+gridHelper.position.y = 0.01;
+scene.add(gridHelper);
+
+// 遠くの山（装飾）
+for (let i = 0; i < 20; i++) {
+  const h = 5 + Math.random() * 15;
+  const mountain = new THREE.Mesh(
+    new THREE.ConeGeometry(8 + Math.random() * 12, h, 6),
+    new THREE.MeshLambertMaterial({ color: 0x5a8a5a })
+  );
+  const angle = (i / 20) * Math.PI * 2;
+  mountain.position.set(Math.cos(angle) * 80, h/2, Math.sin(angle) * 80);
+  mountain.castShadow = true;
+  scene.add(mountain);
+}
+
+// 雲
+for (let i = 0; i < 10; i++) {
+  const cloud = new THREE.Mesh(
+    new THREE.SphereGeometry(3 + Math.random() * 4, 8, 8),
+    new THREE.MeshLambertMaterial({ color: 0xffffff, transparent: true, opacity: 0.8 })
+  );
+  cloud.position.set(
+    (Math.random() - 0.5) * 150,
+    30 + Math.random() * 20,
+    (Math.random() - 0.5) * 150
+  );
+  cloud.scale.y = 0.4;
+  scene.add(cloud);
+}
+
+// ===== 自分のキャラクター =====
+const player = new THREE.Group();
+const pBody = new THREE.Mesh(
+  new THREE.CapsuleGeometry(0.3, 0.8, 8, 16),
+  new THREE.MeshLambertMaterial({ color: 0x2288ff })
+);
+pBody.position.y = 0.9;
+pBody.castShadow = true;
+player.add(pBody);
+const pHead = new THREE.Mesh(
+  new THREE.SphereGeometry(0.25, 16, 16),
+  new THREE.MeshLambertMaterial({ color: 0xffcc99 })
+);
+pHead.position.y = 1.7;
+pHead.castShadow = true;
+player.add(pHead);
+// 武器（棒）
+const pWeapon = new THREE.Mesh(
+  new THREE.BoxGeometry(0.08, 0.08, 0.8),
+  new THREE.MeshLambertMaterial({ color: 0x666666 })
+);
+pWeapon.position.set(0.3, 1.0, 0.3);
+pWeapon.rotation.x = -0.3;
+player.add(pWeapon);
+scene.add(player);
+
+// ===== 状態 =====
+let myName = '', myRoom = '';
+let velocityY = 0;
+let onGround = true;
+let firstPerson = false;
+let blocks = [];       // 自分が見ているブロック
+let otherPlayers = {}; // 他のプレイヤー
+let bullets = [];      // 弾
+let roomRef = null;
+let myRef = null;
+let yaw = 0, pitch = 0;
+let isLocked = false;
+
+const keys = {};
+document.addEventListener('keydown', e => keys[e.code] = true);
+document.addEventListener('keyup', e => keys[e.code] = false);
+
+// マウスロック
+renderer.domElement.addEventListener('click', () => {
+  if (myRoom && !isLocked) renderer.domElement.requestPointerLock();
+});
+document.addEventListener('pointerlockchange', () => {
+  isLocked = document.pointerLockElement === renderer.domElement;
+});
+document.addEventListener('mousemove', e => {
+  if (!isLocked) return;
+  yaw -= e.movementX * 0.002;
+  pitch -= e.movementY * 0.002;
+  pitch = Math.max(-Math.PI/2 + 0.1, Math.min(Math.PI/2 - 0.1, pitch));
+});
+
+// 左クリック: ブロック設置
+document.addEventListener('mousedown', e => {
+  if (!isLocked || !myRoom) return;
+  if (e.button === 0) placeBlock();
+  if (e.button === 2) breakBlock();
+});
+document.addEventListener('contextmenu', e => e.preventDefault());
+
+// E: 射撃
+document.addEventListener('keydown', e => {
+  if (e.code === 'KeyE' && isLocked && myRoom) shoot();
+  if (e.code === 'KeyC') {
+    firstPerson = !firstPerson;
+    pBody.visible = !firstPerson;
+    pHead.visible = !firstPerson;
+    pWeapon.visible = !firstPerson;
+  }
+});
+
+// ===== ブロック設置 =====
+const blockColors = [0xff6644, 0x44aaff, 0x44ff88, 0xffdd44, 0xcc66ff, 0xff88cc];
+let currentColor = 0;
+
+function placeBlock() {
+  const raycaster = new THREE.Raycaster();
+  raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+  const targets = [ground, ...blocks];
+  const hits = raycaster.intersectObjects(targets);
+  if (hits.length > 0 && hits[0].distance < 10) {
+    const point = hits[0].point;
+    const normal = hits[0].face.normal;
+    const bx = Math.round(point.x + normal.x * 0.5);
+    const by = Math.round(point.y + normal.y * 0.5) + 0.5;
+    const bz = Math.round(point.z + normal.z * 0.5);
+    if (by < 0.5) return;
+
+    const color = blockColors[currentColor % blockColors.length];
+    const block = new THREE.Mesh(
+      new THREE.BoxGeometry(1, 1, 1),
+      new THREE.MeshLambertMaterial({ color })
+    );
+    block.position.set(bx, by, bz);
+    block.castShadow = true;
+    block.receiveShadow = true;
+    scene.add(block);
+    blocks.push(block);
+    currentColor++;
+
+    // Firebaseに送信
+    if (myRef) {
+      myRef.child('blocks').push({ x: bx, y: by, z: bz, c: color });
+    }
+  }
+}
+
+// ===== ブロック破壊 =====
+function breakBlock() {
+  const raycaster = new THREE.Raycaster();
+  raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+  const hits = raycaster.intersectObjects(blocks);
+  if (hits.length > 0 && hits[0].distance < 10) {
+    const block = hits[0].object;
+    scene.remove(block);
+    blocks = blocks.filter(b => b !== block);
+    if (myRef) {
+      myRef.child('blocks').set(null);
+      // 簡易的に全ブロック再送
+      const blockData = {};
+      blocks.forEach((b, i) => {
+        blockData['b' + i] = { x: b.position.x, y: b.position.y, z: b.position.z, c: b.material.color.getHex() };
+      });
+      myRef.child('blocks').set(blockData);
+    }
+  }
+}
+
+// ===== 射撃 =====
+function shoot() {
+  const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+  const bullet = new THREE.Mesh(
+    new THREE.SphereGeometry(0.1, 8, 8),
+    new THREE.MeshBasicMaterial({ color: 0xffff00 })
+  );
+  bullet.position.copy(camera.position).add(dir.clone().multiplyScalar(1));
+  scene.add(bullet);
+  bullets.push({ mesh: bullet, vel: dir.multiplyScalar(0.8), life: 60 });
+
+  // Firebaseに送信
+  if (myRef) {
+    myRef.child('bullets').push({
+      x: bullet.position.x, y: bullet.position.y, z: bullet.position.z,
+      dx: dir.x, dy: dir.y, dz: dir.z
+    });
+  }
+}
+
+// ===== ルーム参加 =====
+function joinRoom() {
+  myName = document.getElementById('inp-name').value || 'プレイヤー';
+  myRoom = document.getElementById('inp-room').value || 'default';
+  document.getElementById('join-screen').style.display = 'none';
+  document.getElementById('hud').style.display = 'block';
+  document.getElementById('crosshair').style.display = 'block';
+  document.getElementById('controls').style.display = 'block';
+  document.getElementById('player-list').style.display = 'block';
+
+  roomRef = db.ref('rooms/' + myRoom);
+  myRef = roomRef.child(myName);
+
+  // 位置送信
+  setInterval(() => {
+    if (!myRef) return;
+    myRef.set({
+      x: player.position.x,
+      y: player.position.y,
+      z: player.position.z,
+      yaw: yaw,
+      name: myName,
+      ts: Date.now()
+    });
+  }, 80);
+
+  // 他プレイヤー受信
+  roomRef.on('value', snap => {
+    const data = snap.val() || {};
+    const items = document.getElementById('pl-items');
+    let html = '';
+    Object.keys(data).forEach(name => {
+      const info = data[name];
+      if (name === myName || !info.x) return;
+      html += `<span>🔵 ${name}</span>`;
+
+      if (!otherPlayers[name]) {
+        const g = new THREE.Group();
+        const b = new THREE.Mesh(
+          new THREE.CapsuleGeometry(0.3, 0.8, 8, 16),
+          new THREE.MeshLambertMaterial({ color: Math.floor(Math.random() * 0xffffff) })
+        );
+        b.position.y = 0.9;
+        b.castShadow = true;
+        g.add(b);
+        const h = new THREE.Mesh(
+          new THREE.SphereGeometry(0.25, 16, 16),
+          new THREE.MeshLambertMaterial({ color: 0xffcc99 })
+        );
+        h.position.y = 1.7;
+        g.add(h);
+        scene.add(g);
+        otherPlayers[name] = g;
+      }
+      otherPlayers[name].position.set(info.x, info.y, info.z);
+      if (info.yaw) otherPlayers[name].rotation.y = info.yaw;
+    });
+
+    // 離脱処理
+    Object.keys(otherPlayers).forEach(name => {
+      if (!data[name]) {
+        scene.remove(otherPlayers[name]);
+        delete otherPlayers[name];
+      }
+    });
+    items.innerHTML = html;
+  });
+
+  // 離脱時
+  window.addEventListener('beforeunload', () => {
+    if (myRef) myRef.set(null);
+  });
+}
+
+// ===== ゲームループ =====
+const clock = new THREE.Clock();
+
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = clock.getDelta();
+
+  if (myRoom) {
+    // 移動
+    const speed = 8 * dt;
+    const forward = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
+    const right = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw));
+
+    if (keys['KeyW'] || keys['ArrowUp']) player.position.add(forward.clone().multiplyScalar(speed));
+    if (keys['KeyS'] || keys['ArrowDown']) player.position.add(forward.clone().multiplyScalar(-speed));
+    if (keys['KeyA'] || keys['ArrowLeft']) player.position.add(right.clone().multiplyScalar(-speed));
+    if (keys['KeyD'] || keys['ArrowRight']) player.position.add(right.clone().multiplyScalar(speed));
+
+    // ジャンプ
+    if (keys['Space'] && onGround) {
+      velocityY = 8;
+      onGround = false;
+    }
+    velocityY -= 20 * dt;
+    player.position.y += velocityY * dt;
+    if (player.position.y <= 0) {
+      player.position.y = 0;
+      velocityY = 0;
+      onGround = true;
+    }
+
+    // キャラ向き
+    player.rotation.y = yaw;
+
+    // カメラ
+    if (firstPerson) {
+      camera.position.set(player.position.x, player.position.y + 1.7, player.position.z);
+    } else {
+      const camDist = 5;
+      const camHeight = 3;
+      const cx = player.position.x + Math.sin(yaw) * camDist;
+      const cy = player.position.y + camHeight;
+      const cz = player.position.z + Math.cos(yaw) * camDist;
+      camera.position.set(cx, cy, cz);
+    }
+    camera.rotation.order = 'YXZ';
+    camera.rotation.y = yaw;
+    camera.rotation.x = pitch;
+
+    // HUD
+    const px = Math.round(player.position.x);
+    const py = Math.round(player.position.y);
+    const pz = Math.round(player.position.z);
+    document.getElementById('hud').innerHTML =
+      `📍 X:${px} Y:${py} Z:${pz}<br>🎮 ルーム: ${myRoom} | 👤 ${myName}`;
+
+    // 弾の更新
+    for (let i = bullets.length - 1; i >= 0; i--) {
+      const b = bullets[i];
+      b.mesh.position.add(b.vel);
+      b.life--;
+      if (b.life <= 0) {
+        scene.remove(b.mesh);
+        bullets.splice(i, 1);
+      }
+    }
+  }
+
+  renderer.render(scene, camera);
+}
+animate();
+
+// リサイズ
+window.addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>   
